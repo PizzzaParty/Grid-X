@@ -20,17 +20,19 @@ def test_end_to_end_workflow():
     print("\n1️⃣ Creating test user...")
     resp = requests.post(f"{BACKEND_URL}/auth/register", json={
         "email": TEST_USER_EMAIL,
-        "password": TEST_USER_PASSWORD
+        "password": TEST_USER_PASSWORD,
+        "role": "buyer",
     })
     assert resp.status_code in [200, 400], f"User creation failed: {resp.text}"
-    
-    # Login to get user_id
+
+    # Login — response is now {access_token, user: {id, ...}}
     resp = requests.post(f"{BACKEND_URL}/auth/login", json={
         "email": TEST_USER_EMAIL,
-        "password": TEST_USER_PASSWORD
+        "password": TEST_USER_PASSWORD,
     })
     assert resp.status_code == 200, f"Login failed: {resp.text}"
-    user_id = resp.json()['id']  # API returns user directly, not nested
+    login_data = resp.json()
+    user_id = login_data["user"]["id"]
     print(f"✅ User created/logged in: ID={user_id}")
     
     # ===== STEP 2: Prepare Test Job Files =====
@@ -111,12 +113,13 @@ pandas
     
     # ===== STEP 5: Simulate Worker Registration =====
     print("\n5️⃣ Registering test worker...")
-    
-    # First, create agent owner
+
+    # First, create agent owner as a seller
     agent_email = "agent@gridx.com"
-    resp = requests.post(f"{BACKEND_URL}/auth/register", json={
+    requests.post(f"{BACKEND_URL}/auth/register", json={
         "email": agent_email,
-        "password": "agentpass"
+        "password": "agentpass",
+        "role": "seller",
     })
     
     agent_id = "test_agent_12345"

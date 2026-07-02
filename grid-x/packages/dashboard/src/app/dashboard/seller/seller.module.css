@@ -282,3 +282,10 @@
   background: #1f2937;
   margin-left: 0.5rem;
 }
+
+/* Status badge colours */
+.processing { background: #1c1a00; color: #facc15; }
+.running    { background: #0c1f3d; color: #60a5fa; }
+.completed  { background: #0c2318; color: #4ade80; }
+.idle       { background: #0c2318; color: #4ade80; }
+.offline    { background: #1c1010; color: #f87171; }

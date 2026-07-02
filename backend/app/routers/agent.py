@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import time
 from .. import database, models, schemas
 from ..aggregation import aggregate_pytorch_weights
-from .front_job import upload_bytes_to_supabase
+from .front_job import upload_bytes_to_supabase, SUBTASK_REWARD_CREDITS
 
 
 router = APIRouter()
@@ -115,10 +115,9 @@ def request_task(data: schemas.TaskRequest, db: Session = Depends(database.get_d
     if not job:
         return {"task_id": None}
 
-    # 4. UPDATE DATABASE (Lock the task)
+    # UPDATE DATABASE (Lock the task)
     subtask.status = "RUNNING"
     subtask.assigned_to = data.agent_id
-    subtask.assigned_agent_id = data.agent_id # Redundant but safe if you have this col
     
     # Also update the Agent status to BUSY
     agent = db.query(models.Agent).filter(models.Agent.id == data.agent_id).first()
@@ -192,11 +191,16 @@ def complete_task(data: schemas.TaskComplete, db: Session = Depends(database.get
     subtask.result_file_url = data.result_url
     subtask.completed_at = datetime.now(timezone.utc)
     
-    # 3. FREE THE AGENT
+    # 3. FREE THE AGENT and credit the seller
     agent = db.query(models.Agent).filter(models.Agent.id == data.agent_id).first()
     if agent:
         agent.status = "IDLE"
         agent.last_heartbeat = datetime.now(timezone.utc)
+        # Credit the agent's owner for completing the task
+        seller = db.query(models.User).filter(models.User.id == agent.owner_id).first()
+        if seller:
+            seller.credits += SUBTASK_REWARD_CREDITS
+            print(f"💰 Credited {SUBTASK_REWARD_CREDITS} credit(s) to seller {seller.email}")
 
     # CRITICAL: Commit the status update BEFORE checking if all tasks are done
     # Otherwise the query won't see this task as COMPLETED yet!
@@ -220,11 +224,12 @@ def complete_task(data: schemas.TaskComplete, db: Session = Depends(database.get
             
             # TRIGGER AGGREGATION
             try:
-                print(f"🔄 Starting aggregation for job {parent_job.id}...")
-                final_url = aggregate_pytorch_weights(parent_job.id, db)
+                print(f"🔄 Starting FedAvg aggregation for job {parent_job.id}...")
+                final_url, convergence_delta = aggregate_pytorch_weights(parent_job.id, db)
                 parent_job.final_result_url = final_url
-                db.commit()  # Commit the job status and final URL
-                print(f"✅ Aggregation complete! Final model: {final_url}")
+                parent_job.convergence_delta = convergence_delta
+                db.commit()
+                print(f"✅ Aggregation complete! Convergence delta: {convergence_delta:.6f}")
             except Exception as e:
                 print(f"❌ Aggregation Failed: {e}")
                 import traceback

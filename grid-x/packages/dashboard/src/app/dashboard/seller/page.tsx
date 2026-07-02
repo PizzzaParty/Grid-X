@@ -22,23 +22,17 @@ interface SellerTask {
 }
 
 export default function SellerDashboard() {
-  const { user } = useAuth();
+  const { user, authFetch } = useAuth();
 
   const [agents, setAgents] = useState<Agent[]>([]);
   const [tasks, setTasks] = useState<SellerTask[]>([]);
   const [jobsCompleted, setJobsCompleted] = useState(0);
   const [credits, setCredits] = useState<number | null>(null);
 
-  /* ================= Wallet ================= */
   const fetchWallet = async () => {
     if (!user) return;
-
-    const res = await fetch(`${API_BASE}/wallet/${user.id}`);
-    if (!res.ok) {
-      console.error(await res.text());
-      return;
-    }
-
+    const res = await authFetch(`${API_BASE}/auth/wallet/${user.id}`);
+    if (!res.ok) { console.error(await res.text()); return; }
     const data = await res.json();
     setCredits(data.credits);
   };
@@ -46,14 +40,8 @@ export default function SellerDashboard() {
   /* ================= My Agents ================= */
   const fetchMyAgents = async () => {
     if (!user) return;
-
-    const res = await fetch(`${API_BASE}/stats/my-agents/${user.id}`, {
-      headers: {
-        "ngrok-skip-browser-warning": "69420", // The value can be anything
-      },
-    });
+    const res = await authFetch(`${API_BASE}/stats/my-agents/${user.id}`);
     if (!res.ok) return;
-
     const data = await res.json();
     setAgents(data.agents || []);
   };
@@ -61,14 +49,8 @@ export default function SellerDashboard() {
   /* ================= Seller Tasks ================= */
   const fetchSellerTasks = async () => {
     if (!user) return;
-
-    const res = await fetch(`${API_BASE}/stats/seller-tasks/${user.id}`, {
-      headers: {
-        "ngrok-skip-browser-warning": "69420", // The value can be anything
-      },
-    });
+    const res = await authFetch(`${API_BASE}/stats/seller-tasks/${user.id}`);
     if (!res.ok) return;
-
     const data = await res.json();
     setTasks(data.tasks || []);
     setJobsCompleted(data.total_completed || 0);
@@ -83,12 +65,14 @@ export default function SellerDashboard() {
     fetchSellerTasks();
 
     const interval = setInterval(() => {
+      fetchWallet();
       fetchMyAgents();
       fetchSellerTasks();
     }, 5000);
 
     return () => clearInterval(interval);
-  }, [user]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
 
   /* ================= Status Mapping ================= */
   const getStatusLabel = (status: Agent['status']) => {

@@ -6,7 +6,7 @@ import io
 import os
 from datetime import datetime
 from .. import models, database, schemas
-import shutil
+from ..database import SessionLocal
 import time
 from typing import List
 from datetime import timezone
@@ -15,9 +15,15 @@ from datetime import timezone
 # ==========================================
 # Load from environment variables for security
 # Create a .env file based on .env.example
-SUPABASE_URL = os.getenv("SUPABASE_URL", "https://ryhjmgehgshyuzqhcgwz.supabase.co")
-SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ5aGptZ2VoZ3NoeXV6cWhjZ3d6Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MDM5MTU5MSwiZXhwIjoyMDg1OTY3NTkxfQ.8q_-WKlxj1_dngzHKE6fUmPUch_QjEIXqFZbnZv5S7w")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 BUCKET_NAME = os.getenv("SUPABASE_BUCKET_NAME", "gridx-files")
+
+if not SUPABASE_URL or not SUPABASE_KEY:
+    raise RuntimeError(
+        "Missing required environment variables: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY. "
+        "Copy .env.example to .env and fill in your Supabase credentials."
+    )
 
 # Initialize Supabase
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -59,59 +65,62 @@ def upload_bytes_to_supabase(file_bytes: bytes, destination_path: str, content_t
 # ==========================================
 # 3. BACKGROUND TASK: SPLITTER
 # ==========================================
-def split_csv_and_create_subtasks(job_id: int, csv_content: bytes, db: Session):
+def split_csv_and_create_subtasks(job_id: int, csv_content: bytes):
     """
-    Takes the uploaded CSV, splits it into 5 chunks, uploads chunks, 
+    Takes the uploaded CSV, splits it into 5 chunks, uploads chunks,
     and creates Subtask rows in the database.
+
+    Creates its own DB session because this runs as a background task —
+    after the HTTP request has already closed its session.
     """
-    print(f"🔪 [Job {job_id}] Starting background split...")
-    print(f"   CSV size: {len(csv_content)} bytes")
-    
+    db = SessionLocal()
     try:
+        print(f"🔪 [Job {job_id}] Starting background split...")
+        print(f"   CSV size: {len(csv_content)} bytes")
+
         # A. Load CSV
         print(f"   Loading CSV into pandas...")
         df = pd.read_csv(io.BytesIO(csv_content))
         total_rows = len(df)
-        num_chunks = 5  # Fixed for Hackathon
+        num_chunks = 5  # Fixed for now
         chunk_size = total_rows // num_chunks
         print(f"   ✅ Loaded {total_rows} rows, splitting into {num_chunks} chunks")
-        
+
         # B. Loop and Split
         for i in range(num_chunks):
             print(f"   Processing chunk {i+1}/{num_chunks}...")
             start = i * chunk_size
-            # If last chunk, take everything till the end
+            # Last chunk takes any remainder rows
             if i == num_chunks - 1:
                 subset = df.iloc[start:]
             else:
                 subset = df.iloc[start : start + chunk_size]
-            
+
+            chunk_row_count = len(subset)
+
             # C. Convert Chunk to CSV bytes
             buffer = io.BytesIO()
             subset.to_csv(buffer, index=False)
             chunk_bytes = buffer.getvalue()
-            print(f"      Chunk {i}: {len(subset)} rows, {len(chunk_bytes)} bytes")
-            
+            print(f"      Chunk {i}: {chunk_row_count} rows, {len(chunk_bytes)} bytes")
+
             # D. Upload Chunk
             chunk_path = f"jobs/{job_id}/chunks/chunk_{i}.csv"
             print(f"      Uploading to: {chunk_path}")
-            try:
-                chunk_url = upload_bytes_to_supabase(chunk_bytes, chunk_path, "text/csv")
-                print(f"      ✅ Uploaded: {chunk_url[:60]}...")
-            except Exception as upload_error:
-                print(f"      ❌ Upload failed: {upload_error}")
-                raise
-            
-            # E. Create Subtask in DB
+            chunk_url = upload_bytes_to_supabase(chunk_bytes, chunk_path, "text/csv")
+            print(f"      ✅ Uploaded: {chunk_url[:60]}...")
+
+            # E. Create Subtask in DB — store row count for weighted FedAvg
             new_subtask = models.Subtask(
                 job_id=job_id,
-                assigned_to=None, # No agent yet
+                assigned_to=None,
                 status="PENDING",
-                chunk_file_url=chunk_url
+                chunk_file_url=chunk_url,
+                chunk_row_count=chunk_row_count,
             )
             db.add(new_subtask)
-            print(f"      ✅ Subtask {i+1} created")
-        
+            print(f"      ✅ Subtask {i+1} created ({chunk_row_count} rows)")
+
         # F. Update Job Status
         job = db.query(models.Job).filter(models.Job.id == job_id).first()
         job.status = "RUNNING"
@@ -120,67 +129,84 @@ def split_csv_and_create_subtasks(job_id: int, csv_content: bytes, db: Session):
 
     except Exception as e:
         print(f"❌ [Job {job_id}] Splitting Failed: {e}")
-        print(f"   Error type: {type(e).__name__}")
         import traceback
         traceback.print_exc()
-        # Optional: Set job status to ERROR in DB
         try:
             job = db.query(models.Job).filter(models.Job.id == job_id).first()
             if job:
                 job.status = "ERROR"
                 db.commit()
-        except:
+        except Exception:
             pass
+    finally:
+        db.close()
 
 # ==========================================
 # 4. THE ENDPOINT
 # ==========================================
+
+JOB_COST_CREDITS = 5.0      # Credits deducted from buyer on job submission
+SUBTASK_REWARD_CREDITS = 1.0  # Credits earned by seller per completed subtask (used in agent.py)
+
 @router.post("/upload")
 async def upload_job(
     title: str = Form(...),
-    user_id: int = Form(...), # Retrieve from localStorage in frontend
-    file_code: UploadFile = File(...), # train.py
-    file_req: UploadFile = File(...),  # requirements.txt
-    file_data: UploadFile = File(...), # data.csv
+    user_id: int = Form(...),
+    file_code: UploadFile = File(...),
+    file_req: UploadFile = File(...),
+    file_data: UploadFile = File(...),
     background_tasks: BackgroundTasks = BackgroundTasks(),
     db: Session = Depends(database.get_db)
 ):
+    # 0. Verify the buyer has enough credits
+    buyer = db.query(models.User).filter(models.User.id == user_id).first()
+    if not buyer:
+        raise HTTPException(status_code=404, detail="User not found")
+    if buyer.credits < JOB_COST_CREDITS:
+        raise HTTPException(
+            status_code=402,
+            detail=f"Insufficient credits. Job costs {JOB_COST_CREDITS} credits, "
+                   f"you have {buyer.credits:.1f}."
+        )
+
     # 1. Read Files
     code_bytes = await file_code.read()
-    req_bytes = await file_req.read()
-    data_bytes = await file_data.read() # Needed for splitting later
+    req_bytes  = await file_req.read()
+    data_bytes = await file_data.read()
 
-    # 2. Create Unique Folder Paths
-    # Format: jobs/{user_id}_{timestamp}/filename
+    # 2. Create unique folder paths
     timestamp = int(time.time())
     base_path = f"jobs/{user_id}_{timestamp}"
-    
-    # 3. Upload Original Files
-    code_url = upload_bytes_to_supabase(code_bytes, f"{base_path}/train.py", "text/x-python")
-    req_url = upload_bytes_to_supabase(req_bytes, f"{base_path}/requirements.txt", "text/plain")
-    data_url = upload_bytes_to_supabase(data_bytes, f"{base_path}/data.csv", "text/csv")
 
-    # 4. Create Job Entry in DB
+    # 3. Upload original files to Supabase
+    code_url = upload_bytes_to_supabase(code_bytes, f"{base_path}/train.py",        "text/x-python")
+    req_url  = upload_bytes_to_supabase(req_bytes,  f"{base_path}/requirements.txt", "text/plain")
+    data_url = upload_bytes_to_supabase(data_bytes, f"{base_path}/data.csv",         "text/csv")
+
+    # 4. Deduct credits from the buyer
+    buyer.credits -= JOB_COST_CREDITS
+
+    # 5. Create Job entry
     new_job = models.Job(
         title=title,
-        status="PROCESSING", # Start here, background task will update to RUNNING
+        status="PROCESSING",
         owner_id=user_id,
         original_code_url=code_url,
         original_req_url=req_url,
-        original_data_url=data_url
+        original_data_url=data_url,
     )
     db.add(new_job)
     db.commit()
     db.refresh(new_job)
 
-    # 5. Trigger Background Splitting
-    # We pass the 'data_bytes' we already read so we don't need to download it again
-    background_tasks.add_task(split_csv_and_create_subtasks, new_job.id, data_bytes, db)
+    # 6. Trigger background splitting (creates its own DB session)
+    background_tasks.add_task(split_csv_and_create_subtasks, new_job.id, data_bytes)
 
     return {
         "job_id": new_job.id,
-        "message": "Upload successful! Splitting data in background.",
-        "status": "PROCESSING"
+        "message": f"Upload successful! {JOB_COST_CREDITS:.0f} credits deducted. Splitting data in background.",
+        "status": "PROCESSING",
+        "credits_remaining": buyer.credits,
     }
 
 @router.get("/list/{user_id}", response_model=List[schemas.JobResponse])
@@ -218,8 +244,9 @@ def get_job_status(job_id: int, db: Session = Depends(database.get_db)):
         "status": job.status,
         "created_at": job.created_at,
         "final_result_url": job.final_result_url,
+        "convergence_delta": job.convergence_delta,
         "total_subtasks": total_subtasks,
-        "completed_subtasks": completed_subtasks
+        "completed_subtasks": completed_subtasks,
     }
 
 @router.get("/download/{job_id}", response_model=schemas.JobResultResponse)

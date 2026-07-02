@@ -3,12 +3,12 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import styles from '../login/login.module.css'; // reuse login styles
-import { API_BASE } from '@/lib/api';
+import { API_BASE, API_HEADERS } from '@/lib/api';
 import { useAuth } from '@/context/AuthContext';
 
 export default function RegistrationPage() {
   const router = useRouter();
-  const { setUser } = useAuth();
+  const { login } = useAuth();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -22,26 +22,36 @@ export default function RegistrationPage() {
     setLoading(true);
 
     try {
-      const res = await fetch(`${API_BASE}/auth/register`, {
+      // Step 1: Register the account
+      const registerRes = await fetch(`${API_BASE}/auth/register`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...API_HEADERS },
         body: JSON.stringify({ email, password, role }),
       });
 
-      if (!res.ok) {
-        const msg = await res.text();
-        setError(msg || 'Registration failed');
+      if (!registerRes.ok) {
+        const data = await registerRes.json().catch(() => ({}));
+        setError(data.detail || 'Registration failed');
         return;
       }
 
-      const user = await res.json();
+      // Step 2: Auto-login so the user gets a JWT immediately
+      const loginRes = await fetch(`${API_BASE}/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...API_HEADERS },
+        body: JSON.stringify({ email, password }),
+      });
 
-      // Persist user
-      localStorage.setItem('user', JSON.stringify(user));
-      setUser(user);
+      if (!loginRes.ok) {
+        // Registration succeeded but login failed — send to login page
+        router.push('/login');
+        return;
+      }
 
-      // Redirect based on role
-      if (user.role === 'buyer') {
+      const data = await loginRes.json();
+      login(data.user, data.access_token);
+
+      if (data.user.role === 'buyer') {
         router.push('/dashboard/buyer');
       } else {
         router.push('/dashboard/seller');

@@ -368,9 +368,75 @@
 .jobItem,
 .agentItem {
     display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    margin-bottom: 1rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid #1a1a1a;
+}
+
+.jobItem:last-child,
+.agentItem:last-child {
+    border-bottom: none;
+}
+
+.jobHeader {
+    display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 0.6rem;
+}
+
+/* Progress bar */
+.progressWrapper {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-top: 0.2rem;
+}
+
+.progressBar {
+    flex: 1;
+    height: 6px;
+    background: #1f1f1f;
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.progressFill {
+    height: 100%;
+    background: linear-gradient(90deg, #0070f3, #00c6ff);
+    border-radius: 3px;
+    transition: width 0.4s ease;
+}
+
+.progressLabel {
+    font-size: 0.75rem;
+    color: #666;
+    white-space: nowrap;
+}
+
+.metricText {
+    font-size: 0.75rem;
+    color: #4ade80;
+    margin: 0;
+}
+
+.downloadBtn {
+    margin-top: 0.25rem;
+    padding: 0.35rem 0.8rem;
+    background: transparent;
+    border: 1px solid #0070f3;
+    color: #0070f3;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    width: fit-content;
+}
+
+.downloadBtn:hover {
+    background: #0070f3;
+    color: #fff;
 }
 
 .badge {
@@ -419,4 +485,15 @@
         opacity: 1;
         transform: translateX(0);
     }
+}
+
+/* Status badge colours */
+.processing { background: #1c1a00; color: #facc15; }
+.running    { background: #0c1f3d; color: #60a5fa; }
+.completed  { background: #0c2318; color: #4ade80; }
+.idle       { background: #0c2318; color: #4ade80; }
+.offline    { background: #1c1010; color: #f87171; }
+
+.status {
+    font-size: 0.75rem;
 }

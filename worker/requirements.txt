@@ -1,2 +1,5 @@
 docker==7.1.0
+psutil==6.1.1
+pynvml==11.5.3
 requests==2.32.5
+python-dotenv==1.2.1

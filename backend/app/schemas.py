@@ -9,16 +9,6 @@ class UserCreate(BaseModel):
     role: Optional[str] = "buyer"  # Default role is buyer
 
 # WHAT YOU SEND BACK (Hide the password!)
-class UserResponse(BaseModel):
-    id: int
-    email: str
-    role: str
-    created_at: datetime
-
-    class Config:
-        # This tells Pydantic to read data from the SQL model
-        from_attributes = True
-
 class UserLogin(BaseModel):
     email: EmailStr
     password: str
@@ -28,11 +18,11 @@ class JobResponse(BaseModel):
     title: str
     status: str       # PROCESSING, RUNNING, COMPLETED
     created_at: datetime
-    
-    # Optional: Include these if you want to show download links in the list
+
     original_code_url: str
     original_data_url: str
     final_result_url: Optional[str] = None
+    convergence_delta: Optional[float] = None
 
     class Config:
         from_attributes = True
@@ -119,3 +109,11 @@ class AgentInfo(BaseModel):
 class AgentListResponse(BaseModel):
     user_id: int
     agents: List[AgentInfo]
+
+
+class LoginResponse(BaseModel):
+    """Returned on successful login. The token is a signed JWT the frontend stores
+    and sends as 'Authorization: Bearer <token>' on every subsequent request."""
+    access_token: str
+    token_type: str = "bearer"
+    user: UserResponse

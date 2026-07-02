@@ -160,7 +160,19 @@ test_local.py
 *.old
 backup/
 
-# Personal debugging scripts (not needed in repo)
-check_db.py
+# Worker runtime files
+worker/.agent_id
+worker/__pycache__/
 quick_test.py
 test_supabase.py
+quick_test/data.csv
+quick_test/generate_mnist.py
+quick_test/model.pth
+quick_test/prediction_results.png
+quick_test/requirements.txt
+quick_test/show_result.py
+quick_test/train.py
+quick_test/data/MNIST/raw/t10k-images-idx3-ubyte
+quick_test/data/MNIST/raw/t10k-labels-idx1-ubyte
+quick_test/data/MNIST/raw/train-images-idx3-ubyte
+quick_test/data/MNIST/raw/train-labels-idx1-ubyte

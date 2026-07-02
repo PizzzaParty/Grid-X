@@ -41,7 +41,7 @@ if [ -f "worker/requirements.txt" ]; then
     pip install -r worker/requirements.txt
 else
     echo -e "${YELLOW}⚠️  worker/requirements.txt not found. Installing base dependencies...${NC}"
-    pip install requests python-dotenv docker
+    pip install requests python-dotenv docker psutil pynvml
 fi
 
 # 3. Configuration

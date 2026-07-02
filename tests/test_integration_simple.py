@@ -17,27 +17,32 @@ def test_simple_integration():
     print("\n1️⃣ Creating test user...")
     resp = requests.post(f"{BACKEND_URL}/auth/register", json={
         "email": TEST_USER_EMAIL,
-        "password": TEST_USER_PASSWORD
+        "password": TEST_USER_PASSWORD,
+        "role": "buyer",
     })
     assert resp.status_code == 200, f"User creation failed: {resp.status_code} - {resp.text}"
     user_id = resp.json()['id']
     print(f"✅ User created: ID={user_id}, email={TEST_USER_EMAIL}")
     
-    # Step 2: Login
+    # Step 2: Login — response now includes access_token + user
     print("\n2️⃣ Testing login...")
     resp = requests.post(f"{BACKEND_URL}/auth/login", json={
         "email": TEST_USER_EMAIL,
-        "password": TEST_USER_PASSWORD
+        "password": TEST_USER_PASSWORD,
     })
     assert resp.status_code == 200, f"Login failed: {resp.text}"
-    print(f"✅ Login successful")
+    login_data = resp.json()
+    assert "access_token" in login_data, "No access_token in login response"
+    assert login_data["user"]["id"] == user_id
+    print(f"✅ Login successful, JWT received")
     
     # Step 3: Create agent owner
     print("\n3️⃣ Creating agent owner...")
     agent_email = f"agent_{int(time.time())}@gridx.com"
     resp = requests.post(f"{BACKEND_URL}/auth/register", json={
         "email": agent_email,
-        "password": "agentpass"
+        "password": "agentpass",
+        "role": "seller",
     })
     print(f"✅ Agent owner created: {agent_email}")
     

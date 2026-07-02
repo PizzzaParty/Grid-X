@@ -60,6 +60,9 @@ class Job(Base):
     
     # AGGREGATION
     final_result_url = Column(String, nullable=True)
+    # L2 norm of (weighted FedAvg - uniform avg). Quantifies how much
+    # data distribution skew affected the final model.
+    convergence_delta = Column(Float, nullable=True)
 
     owner_id = Column(Integer, ForeignKey("users.id"))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -77,12 +80,16 @@ class Subtask(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     job_id = Column(Integer, ForeignKey("jobs.id"))
-    assigned_to = Column(String, ForeignKey("agents.id"), nullable=True) # Changed to agents.id
-    
+    assigned_to = Column(String, ForeignKey("agents.id"), nullable=True)
+
     status = Column(String, default="PENDING")
     chunk_file_url = Column(String)
     result_file_url = Column(String, nullable=True)
     completed_at = Column(DateTime(timezone=True), nullable=True)
+
+    # Number of rows in this chunk — used for weighted FedAvg.
+    # Each worker's model is weighted by (its rows / total rows across all workers).
+    chunk_row_count = Column(Integer, nullable=True)
 
     # RELATIONSHIPS
     job = relationship("Job", back_populates="subtasks")

@@ -4,7 +4,6 @@ import { useEffect, useState } from 'react';
 import styles from './buyer.module.css';
 import { API_BASE } from '@/lib/api';
 import { useAuth } from '@/context/AuthContext';
-import TypewriterText from '@/components/TypewriterText';
 
 interface Job {
   id: number;
@@ -13,6 +12,9 @@ interface Job {
   created_at: string;
   original_code_url?: string;
   original_data_url?: string;
+  total_subtasks?: number;
+  completed_subtasks?: number;
+  convergence_delta?: number;
 }
 
 interface Agent {
@@ -24,7 +26,7 @@ interface Agent {
 }
 
 export default function BuyerDashboard() {
-  const { user } = useAuth();
+  const { user, authFetch } = useAuth();
 
   // ─── Upload State ──────────────────────────────────────────────
   const [title, setTitle] = useState('');
@@ -64,7 +66,7 @@ setTimeout(() => {
   setUploadStatus('Splitting dataset across workers...');
 }, 1500);
 
-      const res = await fetch(`${API_BASE}/jobs/upload`, {
+      const res = await authFetch(`${API_BASE}/jobs/upload`, {
         method: 'POST',
         body: formData,
       });
@@ -76,21 +78,10 @@ setTimeout(() => {
       setUploadStatus('Upload failed');
     }
   };
-  /* ===================== Fetch Wallet ===================== */
   const fetchWallet = async () => {
     if (!user) return;
-
-    const res = await fetch(`${API_BASE}/wallet/${user.id}`, {
-      headers: {
-        "ngrok-skip-browser-warning": "69420",
-      },
-    });
-
-    if (!res.ok) {
-      console.error(await res.text());
-      return;
-    }
-
+    const res = await authFetch(`${API_BASE}/auth/wallet/${user.id}`);
+    if (!res.ok) { console.error(await res.text()); return; }
     const data = await res.json();
     setCredits(data.credits);
   };
@@ -98,30 +89,40 @@ setTimeout(() => {
   /* ===================== Fetch Jobs ===================== */
   const fetchJobs = async () => {
     if (!user) return;
-
-    const res = await fetch(`${API_BASE}/jobs/list/${user.id}`, {
-      headers: {
-        "ngrok-skip-browser-warning": "69420", // The value can be anything
-      },
-    });
-
+    const res = await authFetch(`${API_BASE}/jobs/list/${user.id}`);
     if (!res.ok) return;
-    const data = await res.json();
-    setJobs(data);
+    const basicJobs: Job[] = await res.json();
+
+    // For jobs that are actively running, fetch the detail endpoint to get
+    // subtask progress counts. Completed/processing jobs don't need the extra call.
+    const enriched = await Promise.all(
+      basicJobs.map(async (job) => {
+        if (job.status === 'RUNNING' || job.status === 'COMPLETED') {
+          try {
+            const detail = await authFetch(`${API_BASE}/jobs/${job.id}`);
+            if (detail.ok) {
+              const d = await detail.json();
+              return {
+                ...job,
+                total_subtasks: d.total_subtasks,
+                completed_subtasks: d.completed_subtasks,
+                convergence_delta: d.convergence_delta,
+              };
+            }
+          } catch {
+            // non-critical — fall back to basic job data
+          }
+        }
+        return job;
+      })
+    );
+    setJobs(enriched);
   };
 
   /* ===================== Fetch Agents ===================== */
   const fetchAgents = async () => {
-    const res = await fetch(`${API_BASE}/stats/agents/online`, {
-      headers: {
-        "ngrok-skip-browser-warning": "69420", // The value can be anything
-      },
-    });
-    if (!res.ok) {
-      console.error(await res.text());
-      return;
-    }
-
+    const res = await authFetch(`${API_BASE}/stats/agents/online`);
+    if (!res.ok) { console.error(await res.text()); return; }
     const data = await res.json();
     setAgents(data);
   };
@@ -135,19 +136,21 @@ setTimeout(() => {
     fetchAgents();
 
     const interval = setInterval(() => {
+      fetchWallet();
       fetchJobs();
       fetchAgents();
     }, 5000);
 
     return () => clearInterval(interval);
-  }, [user]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
 
 
 
  /* ===================== Open Result ===================== */
 const downloadResult = async (jobId: number) => {
   try {
-    const res = await fetch(`${API_BASE}/jobs/download/${jobId}`);
+    const res = await authFetch(`${API_BASE}/jobs/download/${jobId}`);
 
     if (!res.ok) {
       alert('Result not available yet');
@@ -229,29 +232,58 @@ const downloadResult = async (jobId: number) => {
           {jobs.length === 0 && <p className={styles.muted}>No jobs submitted yet.</p>}
 
           <ul className={styles.list}>
-            {jobs.map(job => (
-              <li key={job.id} className={styles.jobItem}>
-                <div>
-                  <strong className={styles.flowText}>{job.title}</strong>
-                  <span
-  className={`${styles.badge} ${
-    job.status === 'PROCESSING'
-      ? styles.processing
-      : job.status === 'RUNNING'
-      ? styles.running
-      : styles.completed
-  }`}
->
-  {job.status}
-</span>
+            {jobs.map(job => {
+              const total = job.total_subtasks ?? 0;
+              const done = job.completed_subtasks ?? 0;
+              const pct = total > 0 ? Math.round((done / total) * 100) : 0;
 
-                </div>
+              return (
+                <li key={job.id} className={styles.jobItem}>
+                  <div className={styles.jobHeader}>
+                    <strong className={styles.flowText}>{job.title}</strong>
+                    <span
+                      className={`${styles.badge} ${
+                        job.status === 'PROCESSING'
+                          ? styles.processing
+                          : job.status === 'RUNNING'
+                          ? styles.running
+                          : styles.completed
+                      }`}
+                    >
+                      {job.status}
+                    </span>
+                  </div>
 
-                {job.status.toUpperCase() === 'COMPLETED' && (
-                  <button onClick={() => downloadResult(job.id)}>⬇ Download</button>
-                )}
-              </li>
-            ))}
+                  {/* Progress bar — visible while job is running */}
+                  {job.status === 'RUNNING' && total > 0 && (
+                    <div className={styles.progressWrapper}>
+                      <div className={styles.progressBar}>
+                        <div
+                          className={styles.progressFill}
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                      <span className={styles.progressLabel}>
+                        {done}/{total} workers done
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Convergence delta — shown once completed */}
+                  {job.status === 'COMPLETED' && job.convergence_delta !== undefined && (
+                    <p className={styles.metricText}>
+                      Convergence delta: {job.convergence_delta.toFixed(4)}
+                    </p>
+                  )}
+
+                  {job.status.toUpperCase() === 'COMPLETED' && (
+                    <button className={styles.downloadBtn} onClick={() => downloadResult(job.id)}>
+                      ⬇ Download Model
+                    </button>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         </section>
 

@@ -1,64 +1,55 @@
 # Load environment variables FIRST, before any other imports
-# This ensures env vars are available when routers are imported
 from dotenv import load_dotenv
 import os
 from pathlib import Path
 
-# Get the project root (3 levels up from this file: app/main.py -> app -> backend -> project_root)
 project_root = Path(__file__).parent.parent.parent
 env_file = project_root / '.env'
 load_dotenv(env_file)
 
-# Now import everything else
+import asyncio
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .database import engine, Base
-# Import the routers we created
 from .routers import front_auth, front_job, sellers, agent
+from .requeue import requeue_stale_tasks
 
-# ==========================================
-# 1. INITIALIZE DATABASE
-# ==========================================
-# This automatically creates the tables (Users, Agents, Jobs, Subtasks)
-# inside sql_app.db if they don't exist yet.
+# ── Initialize database ───────────────────────────────────────────────────────
 Base.metadata.create_all(bind=engine)
 
-# ==========================================
-# 2. SETUP APP & SECURITY
-# ==========================================
-app = FastAPI(title="GridX Backend", description="Distributed Compute Network API")
+# ── App setup ─────────────────────────────────────────────────────────────────
+app = FastAPI(
+    title="Grid-X API",
+    description="Distributed federated learning marketplace API",
+    version="1.0.0",
+)
 
-# CORS Middleware
-# This is CRITICAL. It allows your React/HTML frontend to talk to this backend.
-# allow_origins=["*"] means "Allow anyone" (Perfect for Hackathons)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], 
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ==========================================
-# 3. PLUG IN THE ROUTERS
-# ==========================================
-# This keeps your code clean. We import logic from other files and "mount" them here.
+# ── Startup: launch background tasks ─────────────────────────────────────────
+@app.on_event("startup")
+async def startup_event():
+    # Requeue any subtasks assigned to workers that have gone silent.
+    # Runs every 60 seconds — see requeue.py for details.
+    asyncio.create_task(requeue_stale_tasks())
 
-# Frontend Routes (For the Website)
-app.include_router(front_auth.router, prefix="/auth", tags=["Frontend: Auth"])
-app.include_router(front_job.router, prefix="/jobs", tags=["Frontend: Jobs"])
-app.include_router(sellers.router, prefix="/stats", tags=["Frontend: Dashboard"])
+# ── Routers ───────────────────────────────────────────────────────────────────
+app.include_router(front_auth.router, prefix="/auth",  tags=["Auth"])
+app.include_router(front_job.router,  prefix="/jobs",  tags=["Jobs"])
+app.include_router(sellers.router,    prefix="/stats", tags=["Dashboard"])
+app.include_router(agent.router,      prefix="/agent", tags=["Agent"])
 
-# Agent Routes (For the Python Scripts on Laptops)
-app.include_router(agent.router, prefix="/agent", tags=["Agent: Operations"])
-
-# ==========================================
-# 4. ROOT ENDPOINT (Health Check)
-# ==========================================
+# ── Health check ──────────────────────────────────────────────────────────────
 @app.get("/")
 def read_root():
     return {
-        "status": "online", 
-        "message": "GridX Server is Running! 🚀",
-        "docs_url": "http://localhost:8000/docs"
+        "status": "online",
+        "message": "Grid-X API is running 🚀",
+        "docs": "/docs",
     }

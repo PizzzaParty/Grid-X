@@ -3,13 +3,13 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import styles from './login.module.css';
-import { API_BASE } from '@/lib/api';
+import { API_BASE, API_HEADERS } from '@/lib/api';
 import { useAuth } from '@/context/AuthContext';
 
 
 export default function LoginPage() {
     const router = useRouter();
-    const { setUser } = useAuth();
+    const { login } = useAuth();
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [loading, setLoading] = useState(false);
@@ -23,8 +23,8 @@ export default function LoginPage() {
         try {
             const res = await fetch(`${API_BASE}/auth/login`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ email, password })
+                headers: { 'Content-Type': 'application/json', ...API_HEADERS },
+                body: JSON.stringify({ email, password }),
             });
 
             if (!res.ok) {
@@ -33,16 +33,13 @@ export default function LoginPage() {
                 return;
             }
 
-            const user = await res.json();
+            // The backend now returns { access_token, token_type, user }
+            const data = await res.json();
+            login(data.user, data.access_token);
 
-            // Save user for later use (jobs, dashboards)
-            localStorage.setItem('user', JSON.stringify(user));
-            setUser(user);
-
-            // Redirect based on backend role
-            if (user.role === 'buyer') {
+            if (data.user.role === 'buyer') {
                 router.push('/dashboard/buyer');
-            } else if (user.role === 'seller') {
+            } else {
                 router.push('/dashboard/seller');
             }
         } catch (err) {

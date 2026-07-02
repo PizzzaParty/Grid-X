@@ -32,19 +32,27 @@ def main():
     # Step 1: Create test user
     print("\n1️⃣ Creating test user...")
     email = f"fulltest_{int(time.time())}@gridx.com"
-    resp = requests.post(f"{BACKEND_URL}/auth/register", json={
+    requests.post(f"{BACKEND_URL}/auth/register", json={
         "email": email,
-        "password": "test123"
+        "password": "test123",
+        "role": "buyer",
     })
-    user_id = resp.json()['id']
+
+    # Login to get user_id and token
+    login = requests.post(f"{BACKEND_URL}/auth/login", json={
+        "email": email,
+        "password": "test123",
+    }).json()
+    user_id = login["user"]["id"]
     print(f"✅ User created: ID={user_id}")
-    
+
     # Step 2: Create agent owner and register worker
     print("\n2️⃣ Creating worker...")
     agent_email = f"agent_{int(time.time())}@gridx.com"
     requests.post(f"{BACKEND_URL}/auth/register", json={
         "email": agent_email,
-        "password": "agent123"
+        "password": "agent123",
+        "role": "seller",
     })
     
     agent_id = f"test_worker_{int(time.time())}"
@@ -208,6 +216,8 @@ print("Model saved!")
         
         if test_job['status'] == 'COMPLETED':
             print("\n✅ AGGREGATION SUCCESSFUL!")
+            if test_job.get('convergence_delta') is not None:
+                print(f"   Convergence delta: {test_job['convergence_delta']:.6f}")
             
             # Try to download final model
             if test_job.get('final_result_url'):
