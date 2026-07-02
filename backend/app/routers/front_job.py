@@ -78,24 +78,55 @@ def split_csv_and_create_subtasks(job_id: int, csv_content: bytes):
         print(f"🔪 [Job {job_id}] Starting background split...")
         print(f"   CSV size: {len(csv_content)} bytes")
 
-        # A. Load CSV
+        # A. Load CSV, then split with stratification if possible.
+        #
+        #    Why this matters — data heterogeneity (non-IID data) is the core
+        #    failure mode of FedAvg. If chunks have different class distributions,
+        #    each worker's model drifts toward its local skew. Averaging drifted
+        #    models produces a worse result than any single model alone.
+        #
+        #    Strategy:
+        #    1. Try stratified split on the last column (assumed label).
+        #       This guarantees every chunk has the same class distribution.
+        #    2. If stratification fails (regression target, too few samples,
+        #       etc.), fall back to a shuffled sequential split which is still
+        #       much better than an unshuffled sequential split.
         print(f"   Loading CSV into pandas...")
         df = pd.read_csv(io.BytesIO(csv_content))
         total_rows = len(df)
-        num_chunks = 5  # Fixed for now
-        chunk_size = total_rows // num_chunks
+        num_chunks = 5
+        chunks = []
+
+        try:
+            label_col = df.columns[-1]
+            label_values = df[label_col]
+            # Only stratify if the label looks categorical (≤20 unique values)
+            if label_values.nunique() <= 20:
+                from sklearn.model_selection import StratifiedKFold
+                skf = StratifiedKFold(n_splits=num_chunks, shuffle=True, random_state=42)
+                # StratifiedKFold gives us indices for each fold
+                for _, fold_idx in skf.split(df, label_values):
+                    chunks.append(df.iloc[fold_idx].reset_index(drop=True))
+                print(f"   ✅ Stratified split on '{label_col}' ({label_values.nunique()} classes)")
+            else:
+                raise ValueError("Continuous target — using shuffled split")
+        except Exception as strat_err:
+            print(f"   ℹ️  Stratification skipped ({strat_err}), using shuffled split")
+            df = df.sample(frac=1, random_state=42).reset_index(drop=True)
+            chunk_size = total_rows // num_chunks
+            for i in range(num_chunks):
+                start = i * chunk_size
+                end = None if i == num_chunks - 1 else start + chunk_size
+                chunks.append(df.iloc[start:end].reset_index(drop=True))
+
+        print(f"   ✅ {total_rows} rows → {num_chunks} chunks")
+
+        # B. Upload each chunk and create a Subtask
         print(f"   ✅ Loaded {total_rows} rows, splitting into {num_chunks} chunks")
 
-        # B. Loop and Split
-        for i in range(num_chunks):
+        # B. Upload each chunk and create a Subtask
+        for i, subset in enumerate(chunks):
             print(f"   Processing chunk {i+1}/{num_chunks}...")
-            start = i * chunk_size
-            # Last chunk takes any remainder rows
-            if i == num_chunks - 1:
-                subset = df.iloc[start:]
-            else:
-                subset = df.iloc[start : start + chunk_size]
-
             chunk_row_count = len(subset)
 
             # C. Convert Chunk to CSV bytes
